@@ -645,29 +645,8 @@
                     </div>
                 </div>
 
-                <!-- Radio: Dia de Asistencia -->
-                <div class="radio-section">
-                    <label>Seleccione el D&iacute;a de Asistencia *</label>
-                    <div class="radio-options">
-                        <div class="radio-option" onclick="selectDay(this, 'miercoles')" data-day="miercoles">
-                            <div class="radio-circle"><div class="radio-circle-inner"></div></div>
-                            <div class="radio-text">
-                                <strong>Jueves 01 de Octubre</strong>
-                                <span>Jornada Inicial</span>
-                            </div>
-                        </div>
-                        <div class="radio-option" onclick="selectDay(this, 'jueves')" data-day="jueves">
-                            <div class="radio-circle"><div class="radio-circle-inner"></div></div>
-                            <div class="radio-text">
-                                <strong>Viernes 02 de Octubre</strong>
-                                <span>Jornada de Cierre</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Bloques Horarios Dinamicos -->
-                <div class="bloques-section" id="bloquesSection">
+                <!-- Bloques Horarios (dia fijo: Jueves 1 de Octubre) -->
+                <div class="bloques-section visible" id="bloquesSection">
                     <label class="bloques-label">Bloques Horarios Disponibles (M&aacute;x. 3 colegios por bloque) *</label>
                     <div class="bloques-grid" id="bloquesGrid">
                         <!-- Se llena din&aacute;micamente -->
@@ -730,19 +709,14 @@
 
     <script>
     // =============================================
-    // CONFIGURACI&Oacute;N - CAMBIAR ESTA URL DESPU&Eacute;S DE DESPLEGAR EL APPS SCRIPT
+    // CONFIGURACION - URL DEL APPS SCRIPT DESPLEGADO
     // =============================================
-    const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyUTK1K1aPn39IasMHszhniU6VQSNpMTBb8U_GXMvmEc5j0o5lSTqlVCK3FgTGHP_yW5g/exec';
+    // IMPORTANTE: Despues de pegar el nuevo codigo en Apps Script,
+    // crea una NUEVA implementacion y reemplaza esta URL con la nueva.
+    var APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxUfBCLR18ka_WqeEC6sRXgU8SaNcxYdALOJSVcLtOmnx2rf27aycz7qAWuliKkY_aI/exec';
 
-    // Bloques horarios por d&iacute;a
-    const BLOQUES = {
-        miercoles: [
-            { id: 'MIE_B1', nombre: 'Bloque 1', horario: '08:30 - 10:00' },
-            { id: 'MIE_B2', nombre: 'Bloque 2', horario: '10:15 - 11:45' },
-            { id: 'MIE_B3', nombre: 'Bloque 3', horario: '12:00 - 13:30' },
-            { id: 'MIE_B4', nombre: 'Bloque 4', horario: '14:30 - 16:00' },
-            { id: 'MIE_B5', nombre: 'Bloque 5', horario: '16:15 - 17:45' }
-        ],
+    // Bloques horarios - solo Jueves 1 de Octubre
+    var BLOQUES = {
         jueves: [
             { id: 'JUE_B1', nombre: 'Bloque 1', horario: '08:30 - 10:00' },
             { id: 'JUE_B2', nombre: 'Bloque 2', horario: '10:15 - 11:45' },
@@ -752,13 +726,53 @@
         ]
     };
 
-    const MAX_CUPOS = 3;
-    let selectedDay = null;
-    let selectedBloque = null;
-    let disponibilidad = {}; // { bloqueId: cuposUsados }
+    var MAX_CUPOS = 3;
+    var selectedDay = 'jueves'; // Dia fijo: Jueves 1 de Octubre
+    var selectedBloque = null;
+    var disponibilidad = {}; // { bloqueId: cuposUsados }
+    var jsonpCounter = 0;
+
+    // ===== JSONP: cargar datos via script tag (bypass sandbox fetch block) =====
+    function jsonpRequest(url, callback) {
+        var callbackName = '_jsonp_cb_' + (++jsonpCounter) + '_' + Date.now();
+        var timeout;
+
+        // Registrar callback global
+        window[callbackName] = function(data) {
+            clearTimeout(timeout);
+            // Limpiar
+            delete window[callbackName];
+            var script = document.getElementById(callbackName);
+            if (script) script.parentNode.removeChild(script);
+            callback(null, data);
+        };
+
+        // Timeout de 15 segundos
+        timeout = setTimeout(function() {
+            delete window[callbackName];
+            var script = document.getElementById(callbackName);
+            if (script) script.parentNode.removeChild(script);
+            callback(new Error('Tiempo de espera agotado'));
+        }, 15000);
+
+        // Crear tag script
+        var script = document.createElement('script');
+        script.id = callbackName;
+        var separator = url.indexOf('?') >= 0 ? '&' : '?';
+        script.src = url + separator + 'callback=' + callbackName;
+
+        script.onerror = function() {
+            clearTimeout(timeout);
+            delete window[callbackName];
+            if (script.parentNode) script.parentNode.removeChild(script);
+            callback(new Error('Error de red'));
+        };
+
+        document.body.appendChild(script);
+    }
 
     // ===== SCROLL ANIMATIONS =====
-    const observer = new IntersectionObserver(function(entries) {
+    var observer = new IntersectionObserver(function(entries) {
         entries.forEach(function(entry) {
             if (entry.isIntersecting) {
                 var delay = parseInt(entry.target.getAttribute('data-delay')) || 0;
@@ -774,26 +788,17 @@
         observer.observe(el);
     });
 
-    // ===== DAY SELECTION =====
-    function selectDay(el, day) {
-        document.querySelectorAll('.radio-option').forEach(function(opt) {
-            opt.classList.remove('selected');
-        });
-        el.classList.add('selected');
-        selectedDay = day;
-        selectedBloque = null;
-        loadBloques(day);
-    }
-
     // ===== LOAD BLOQUES =====
     function loadBloques(day) {
         var section = document.getElementById('bloquesSection');
         var grid = document.getElementById('bloquesGrid');
         grid.innerHTML = '';
 
-        // Intentar cargar disponibilidad desde el servidor
+        // Cargar disponibilidad desde el servidor via JSONP
         fetchDisponibilidad(day, function() {
             var bloques = BLOQUES[day];
+            if (!bloques) return;
+
             bloques.forEach(function(bloque) {
                 var cuposUsados = disponibilidad[bloque.id] || 0;
                 var cuposLibres = MAX_CUPOS - cuposUsados;
@@ -840,32 +845,27 @@
         hideError();
     }
 
-    // ===== FETCH DISPONIBILIDAD FROM GOOGLE SHEETS =====
+    // ===== FETCH DISPONIBILIDAD VIA JSONP =====
     function fetchDisponibilidad(day, callback) {
-        if (APPS_SCRIPT_URL === 'TU_URL_DE_APPS_SCRIPT_AQUI') {
-            // Demo mode: sin conexi&oacute;n al servidor
-            console.log('Modo demo: Configure APPS_SCRIPT_URL para conectar con Google Sheets');
-            callback();
-            return;
-        }
-
         var url = APPS_SCRIPT_URL + '?action=getDisponibilidad&dia=' + encodeURIComponent(day);
 
-        fetch(url)
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                if (data.success && data.disponibilidad) {
-                    disponibilidad = data.disponibilidad;
+        jsonpRequest(url, function(err, data) {
+            if (!err && data && data.status === 'ok' && data.bloques) {
+                disponibilidad = {};
+                var bloques = data.bloques;
+                for (var id in bloques) {
+                    if (bloques.hasOwnProperty(id)) {
+                        disponibilidad[id] = bloques[id].cuposUsados || 0;
+                    }
                 }
-                callback();
-            })
-            .catch(function(err) {
+            } else if (err) {
                 console.error('Error al cargar disponibilidad:', err);
-                callback();
-            });
+            }
+            callback();
+        });
     }
 
-    // ===== SUBMIT FORM =====
+    // ===== SUBMIT FORM VIA JSONP (GET con parametros) =====
     function submitForm() {
         hideError();
         var colegio = document.getElementById('colegio').value.trim();
@@ -879,63 +879,42 @@
             showError('Por favor complete todos los campos obligatorios.');
             return;
         }
-        if (!selectedDay) {
-            showError('Por favor seleccione el día de asistencia.');
-            return;
-        }
         if (!selectedBloque) {
             showError('Por favor seleccione un bloque horario disponible.');
             return;
         }
 
-        // Datos del formulario
-        var formData = {
-            action: 'registrar',
-            colegio: colegio,
-            contacto: contacto,
-            telefono: telefono,
-            correo: correo,
-            cantidad: cantidad,
-            dia: selectedDay,
-            bloque: selectedBloque,
-            timestamp: new Date().toISOString()
-        };
+        showLoading();
 
-        if (APPS_SCRIPT_URL === 'TU_URL_DE_APPS_SCRIPT_AQUI') {
-            // Demo mode
-            showLoading();
-            setTimeout(function() {
-                hideLoading();
+        // Construir URL con todos los parametros via GET (JSONP)
+        var params = [
+            'action=registrar',
+            'colegio=' + encodeURIComponent(colegio),
+            'contacto=' + encodeURIComponent(contacto),
+            'telefono=' + encodeURIComponent(telefono),
+            'correo=' + encodeURIComponent(correo),
+            'cantidad=' + encodeURIComponent(cantidad),
+            'dia=' + encodeURIComponent(selectedDay),
+            'bloqueId=' + encodeURIComponent(selectedBloque)
+        ].join('&');
+
+        var url = APPS_SCRIPT_URL + '?' + params;
+
+        jsonpRequest(url, function(err, data) {
+            hideLoading();
+            if (err) {
+                showError('Error de conexion. Verifique su internet e intentelo de nuevo.');
+                console.error('Error JSONP:', err);
+                return;
+            }
+            if (data && data.status === 'ok') {
                 showSuccess(colegio, selectedBloque);
-                // Simular cupo usado
+                // Actualizar disponibilidad local
                 disponibilidad[selectedBloque] = (disponibilidad[selectedBloque] || 0) + 1;
                 loadBloques(selectedDay);
-            }, 1500);
-            return;
-        }
-
-        // Enviar al servidor
-        showLoading();
-        fetch(APPS_SCRIPT_URL, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: Object.keys(formData).map(function(k) {
-                return encodeURIComponent(k) + '=' + encodeURIComponent(formData[k]);
-            }).join('&')
-        })
-        .then(function() {
-            // Con no-cors no podemos leer la respuesta, pero asumimos &eacute;xito
-            hideLoading();
-            showSuccess(colegio, selectedBloque);
-            // Actualizar disponibilidad local
-            disponibilidad[selectedBloque] = (disponibilidad[selectedBloque] || 0) + 1;
-            loadBloques(selectedDay);
-        })
-        .catch(function(err) {
-            hideLoading();
-            showError('Error al enviar la inscripción. Inténtelo de nuevo.');
-            console.error(err);
+            } else {
+                showError((data && data.message) || 'Error al registrar. Intente nuevamente.');
+            }
         });
     }
 
@@ -958,31 +937,32 @@
     }
     function showSuccess(colegio, bloqueId) {
         var bloqueInfo = '';
-        var allBloques = BLOQUES.miercoles.concat(BLOQUES.jueves);
+        var allBloques = BLOQUES.jueves;
         for (var i = 0; i < allBloques.length; i++) {
             if (allBloques[i].id === bloqueId) {
                 bloqueInfo = allBloques[i].nombre + ' (' + allBloques[i].horario + ')';
                 break;
             }
         }
-        var dayText = selectedDay === 'miercoles' ? 'Jueves 01 de Octubre' : 'Viernes 02 de Octubre';
         document.getElementById('successText').innerHTML =
-            '<strong>' + colegio + '</strong> ha sido registrado para el <strong>' + dayText +
-            '</strong> en el <strong>' + bloqueInfo + '</strong>.<br>Se enviará un comprobante al correo registrado.';
+            '<strong>' + colegio + '</strong> ha sido registrado para el <strong>Jueves 01 de Octubre</strong>' +
+            ' en el <strong>' + bloqueInfo + '</strong>.<br>Se enviara un comprobante al correo registrado.';
         document.getElementById('successMsg').classList.add('visible');
         document.getElementById('submitBtn').disabled = true;
 
-        // Reset form despu&eacute;s de 5 segundos
+        // Reset form despues de 8 segundos
         setTimeout(function() {
             document.getElementById('inscripcionForm').reset();
             document.getElementById('successMsg').classList.remove('visible');
             document.getElementById('submitBtn').disabled = false;
-            document.querySelectorAll('.radio-option').forEach(function(o) { o.classList.remove('selected'); });
-            document.getElementById('bloquesSection').classList.remove('visible');
-            selectedDay = null;
             selectedBloque = null;
+            // Recargar bloques para mostrar disponibilidad actualizada
+            loadBloques('jueves');
         }, 8000);
     }
+
+    // ===== AUTO-CARGAR BLOQUES AL INICIAR =====
+    loadBloques('jueves');
     </script>
 </body>
 </html>
